@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { MOLTBOT_PORT } from '../config';
-import { findExistingMoltbotProcess } from '../gateway';
+import { findExistingMoltbotProcess, ensureMoltbotGateway } from '../gateway';
 
 /**
  * Public routes - NO Cloudflare Access authentication required
@@ -61,6 +61,59 @@ publicRoutes.get('/_admin/assets/*', async (c) => {
   const assetPath = url.pathname.replace('/_admin/assets/', '/assets/');
   const assetUrl = new URL(assetPath, url.origin);
   return c.env.ASSETS.fetch(new Request(assetUrl.toString(), c.req.raw));
+});
+
+// POST /api/start - Start the gateway (public endpoint for HAL)
+publicRoutes.post('/api/start', async (c) => {
+  const sandbox = c.get('sandbox');
+
+  try {
+    console.log('[API/START] Starting gateway...');
+    await ensureMoltbotGateway(sandbox, c.env);
+    console.log('[API/START] Gateway started successfully');
+
+    const process = await findExistingMoltbotProcess(sandbox);
+    return c.json({
+      ok: true,
+      status: 'running',
+      processId: process?.id || 'unknown'
+    });
+  } catch (err) {
+    console.error('[API/START] Failed to start gateway:', err);
+    return c.json({
+      ok: false,
+      error: err instanceof Error ? err.message : 'Unknown error'
+    }, 500);
+  }
+});
+
+// POST /api/force-restart - Kill all processes and restart gateway (emergency cleanup)
+publicRoutes.post('/api/force-restart', async (c) => {
+  const sandbox = c.get('sandbox');
+
+  try {
+    const processes = await sandbox.listProcesses();
+    console.log(`[FORCE-RESTART] Killing ${processes.length} processes`);
+
+    for (const proc of processes) {
+      try {
+        await proc.kill();
+      } catch {
+        // Ignore kill errors
+      }
+    }
+
+    return c.json({
+      ok: true,
+      killed: processes.length,
+      message: 'All processes killed. Gateway will restart on next request.'
+    });
+  } catch (err) {
+    return c.json({
+      ok: false,
+      error: err instanceof Error ? err.message : 'Unknown error'
+    }, 500);
+  }
 });
 
 export { publicRoutes };

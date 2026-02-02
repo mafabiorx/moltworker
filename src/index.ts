@@ -188,7 +188,24 @@ app.use('*', async (c, next) => {
 });
 
 // Middleware: Cloudflare Access authentication for protected routes
+// Skip public routes that don't require authentication
+const PUBLIC_PATHS = [
+  '/sandbox-health',
+  '/logo.png',
+  '/logo-small.png',
+  '/api/status',
+  '/api/start',
+  '/api/force-restart',
+];
+
 app.use('*', async (c, next) => {
+  const url = new URL(c.req.url);
+
+  // Skip auth for public paths
+  if (PUBLIC_PATHS.includes(url.pathname) || url.pathname.startsWith('/_admin/assets/')) {
+    return next();
+  }
+
   // Determine response type based on Accept header
   const acceptsHtml = c.req.header('Accept')?.includes('text/html');
   const middleware = createAccessMiddleware({
