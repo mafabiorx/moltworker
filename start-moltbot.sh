@@ -284,6 +284,13 @@ if (isOpenAI) {
     config.agents.defaults.models['anthropic/claude-opus-4-5'] = { alias: 'Opus 4.5' };
     config.agents.defaults.models['anthropic/claude-sonnet-4-5'] = { alias: 'Sonnet 4.5' };
     config.agents.defaults.models['anthropic/claude-haiku-4-5'] = { alias: 'Haiku 4.5' };
+
+    // Add OpenAI models as secondary provider when OPENAI_API_KEY is available
+    if (process.env.OPENAI_API_KEY) {
+        console.log('OpenAI API key detected, adding OpenAI models to allowlist');
+        config.agents.defaults.models['openai/gpt-5.2'] = { alias: 'GPT-5.2' };
+        config.agents.defaults.models['openai/gpt-5.3-codex'] = { alias: 'GPT-5.3 Codex' };
+    }
 }
 
 // Write updated config
