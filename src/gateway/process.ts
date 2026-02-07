@@ -5,6 +5,41 @@ import { buildEnvVars } from './env';
 import { mountR2Storage } from './r2';
 
 /**
+ * Clean up dead processes (completed/failed) to prevent accumulation
+ *
+ * Cloudflare Sandbox keeps all historical processes in listProcesses().
+ * This function removes dead processes before starting new ones.
+ *
+ * @param sandbox - The sandbox instance
+ * @returns Number of processes cleaned up
+ */
+async function cleanupDeadProcesses(sandbox: Sandbox): Promise<number> {
+  try {
+    const processes = await sandbox.listProcesses();
+    let killed = 0;
+
+    for (const proc of processes) {
+      if (proc.status === 'completed' || proc.status === 'failed') {
+        try {
+          await proc.kill();
+          killed++;
+        } catch {
+          // Already dead, ignore
+        }
+      }
+    }
+
+    if (killed > 0) {
+      console.log(`[Cleanup] Removed ${killed} dead processes`);
+    }
+    return killed;
+  } catch (e) {
+    console.log('[Cleanup] Failed to cleanup processes:', e);
+    return 0;
+  }
+}
+
+/**
  * Find an existing Moltbot gateway process
  * 
  * @param sandbox - The sandbox instance
@@ -14,14 +49,13 @@ export async function findExistingMoltbotProcess(sandbox: Sandbox): Promise<Proc
   try {
     const processes = await sandbox.listProcesses();
     for (const proc of processes) {
-      // Only match the gateway process, not CLI commands like "clawdbot devices list"
-      // Note: CLI is still named "clawdbot" until upstream renames it
-      const isGatewayProcess = 
+      // Only match the gateway process, not CLI commands like "openclaw devices list"
+      const isGatewayProcess =
         proc.command.includes('start-moltbot.sh') ||
-        proc.command.includes('clawdbot gateway');
-      const isCliCommand = 
-        proc.command.includes('clawdbot devices') ||
-        proc.command.includes('clawdbot --version');
+        proc.command.includes('openclaw gateway');
+      const isCliCommand =
+        proc.command.includes('openclaw devices') ||
+        proc.command.includes('openclaw --version');
       
       if (isGatewayProcess && !isCliCommand) {
         if (proc.status === 'starting' || proc.status === 'running') {
@@ -48,6 +82,9 @@ export async function findExistingMoltbotProcess(sandbox: Sandbox): Promise<Proc
  * @returns The running gateway process
  */
 export async function ensureMoltbotGateway(sandbox: Sandbox, env: MoltbotEnv): Promise<Process> {
+  // Clean up dead processes first to prevent accumulation
+  await cleanupDeadProcesses(sandbox);
+
   // Mount R2 storage for persistent data (non-blocking if not configured)
   // R2 is used as a backup - the startup script will restore from it on boot
   await mountR2Storage(sandbox, env);

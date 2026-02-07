@@ -33,11 +33,12 @@
     "command": "npm run build",
   },
   // Container configuration for the Moltbot sandbox
+  // NOTE: Set SANDBOX_SLEEP_AFTER secret to enable sleep (e.g., "30m") for cost savings
   "containers": [
     {
       "class_name": "Sandbox",
       "image": "./Dockerfile",
-      "instance_type": "standard-4",
+      "instance_type": "standard-2",  // Downgraded from standard-4 for cost savings
       "max_instances": 1,
     },
   ],

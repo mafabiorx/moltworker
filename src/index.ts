@@ -434,7 +434,10 @@ app.all('*', async (c) => {
 
 /**
  * Scheduled handler for cron triggers.
- * Syncs moltbot config/state from container to R2 for persistence.
+ *
+ * Two responsibilities:
+ * 1. Health check: Ensure gateway is running (fixes Telegram polling dying when no HTTP requests)
+ * 2. Backup: Sync moltbot config/state from container to R2 for persistence
  */
 async function scheduled(
   _event: ScheduledEvent,
@@ -444,6 +447,21 @@ async function scheduled(
   const options = buildSandboxOptions(env);
   const sandbox = getSandbox(env.Sandbox, 'moltbot', options);
 
+  // Step 1: Health check - ensure gateway is running
+  // This is critical because Telegram uses long-polling, not webhooks.
+  // If the polling connection dies and no HTTP requests come in to trigger
+  // ensureMoltbotGateway(), the bot becomes unresponsive.
+  console.log('[cron] Running gateway health check...');
+  try {
+    await ensureMoltbotGateway(sandbox, env);
+    console.log('[cron] Gateway health check passed');
+  } catch (error) {
+    console.error('[cron] Gateway health check failed:', error);
+    // Continue to R2 sync even if health check fails
+    // The sync might still work if container is partially running
+  }
+
+  // Step 2: Backup - sync to R2
   console.log('[cron] Starting backup sync to R2...');
   const result = await syncToR2(sandbox, env);
 
