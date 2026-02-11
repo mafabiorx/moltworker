@@ -7,6 +7,7 @@ export interface MoltbotEnv {
   Sandbox: DurableObjectNamespace<Sandbox>;
   ASSETS: Fetcher; // Assets binding for admin UI static files
   MOLTBOT_BUCKET: R2Bucket; // R2 bucket for persistent storage
+  HAL_STORAGE: R2Bucket; // R2 bucket for binary cache (bootstrap speed)
   // Cloudflare AI Gateway configuration (preferred)
   CF_AI_GATEWAY_ACCOUNT_ID?: string; // Cloudflare account ID for AI Gateway
   CF_AI_GATEWAY_GATEWAY_ID?: string; // AI Gateway ID
@@ -33,11 +34,15 @@ export interface MoltbotEnv {
   // Cloudflare Access configuration for admin routes
   CF_ACCESS_TEAM_DOMAIN?: string; // e.g., 'myteam.cloudflareaccess.com'
   CF_ACCESS_AUD?: string; // Application Audience (AUD) tag
-  // R2 credentials for bucket mounting (set via wrangler secret)
+  // R2 credentials for moltbot-data bucket mounting (set via wrangler secret)
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
   R2_BUCKET_NAME?: string; // Override bucket name (default: 'moltbot-data')
   CF_ACCOUNT_ID?: string; // Cloudflare account ID for R2 endpoint
+  // R2 credentials for hal-storage binary cache (scoped token, set via wrangler secret)
+  HAL_STORAGE_ACCESS_KEY?: string;
+  HAL_STORAGE_SECRET_KEY?: string;
+  HAL_STORAGE_ENDPOINT?: string; // https://<account_id>.r2.cloudflarestorage.com
   // Browser Rendering binding for CDP shim
   BROWSER?: Fetcher;
   CDP_SECRET?: string; // Shared secret for CDP endpoint authentication
