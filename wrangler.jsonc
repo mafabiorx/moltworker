@@ -63,9 +63,11 @@
       "bucket_name": "moltbot-data",
     },
   ],
-  // Cron trigger to sync moltbot data to R2 every 5 minutes
+  // Cron triggers:
+  // - Every 5 minutes: sync moltbot data to R2 and keep gateway alive
+  // - 8:55 UTC (9:55 IT): wake container before morning briefing cron at 9:00 UTC
   "triggers": {
-    "crons": ["*/5 * * * *"],
+    "crons": ["*/5 * * * *", "55 8 * * *"],
   },
   // Browser Rendering binding for CDP shim
   "browser": {
