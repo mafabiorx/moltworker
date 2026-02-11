@@ -26,7 +26,7 @@ import { getSandbox, Sandbox, type SandboxOptions } from '@cloudflare/sandbox';
 import type { AppEnv, MoltbotEnv } from './types';
 import { MOLTBOT_PORT } from './config';
 import { createAccessMiddleware } from './auth';
-import { ensureMoltbotGateway, findExistingMoltbotProcess, syncToR2 } from './gateway';
+import { ensureMoltbotGateway, findExistingMoltbotProcess, fireAndForgetSync } from './gateway';
 import { publicRoutes, api, adminUi, debug, cdp } from './routes';
 import { redactSensitiveParams } from './utils/logging';
 import loadingPageHtml from './assets/loading.html';
@@ -72,15 +72,20 @@ function validateRequiredEnv(env: MoltbotEnv): string[] {
     }
   }
 
-  // Check for AI Gateway or direct Anthropic configuration
-  if (env.AI_GATEWAY_API_KEY) {
-    // AI Gateway requires both API key and base URL
-    if (!env.AI_GATEWAY_BASE_URL) {
-      missing.push('AI_GATEWAY_BASE_URL (required when using AI_GATEWAY_API_KEY)');
-    }
-  } else if (!env.ANTHROPIC_API_KEY) {
-    // Direct Anthropic access requires API key
-    missing.push('ANTHROPIC_API_KEY or AI_GATEWAY_API_KEY');
+  // Check for AI provider configuration (at least one must be set)
+  const hasCloudflareGateway = !!(
+    env.CLOUDFLARE_AI_GATEWAY_API_KEY &&
+    env.CF_AI_GATEWAY_ACCOUNT_ID &&
+    env.CF_AI_GATEWAY_GATEWAY_ID
+  );
+  const hasLegacyGateway = !!(env.AI_GATEWAY_API_KEY && env.AI_GATEWAY_BASE_URL);
+  const hasAnthropicKey = !!env.ANTHROPIC_API_KEY;
+  const hasOpenAIKey = !!env.OPENAI_API_KEY;
+
+  if (!hasCloudflareGateway && !hasLegacyGateway && !hasAnthropicKey && !hasOpenAIKey) {
+    missing.push(
+      'ANTHROPIC_API_KEY, OPENAI_API_KEY, or CLOUDFLARE_AI_GATEWAY_API_KEY + CF_AI_GATEWAY_ACCOUNT_ID + CF_AI_GATEWAY_GATEWAY_ID',
+    );
   }
 
   return missing;
@@ -88,11 +93,11 @@ function validateRequiredEnv(env: MoltbotEnv): string[] {
 
 /**
  * Build sandbox options based on environment configuration.
- * 
+ *
  * SANDBOX_SLEEP_AFTER controls how long the container stays alive after inactivity:
  * - 'never' (default): Container stays alive indefinitely (recommended due to long cold starts)
  * - Duration string: e.g., '10m', '1h', '30s' - container sleeps after this period of inactivity
- * 
+ *
  * To reduce costs at the expense of cold start latency, set SANDBOX_SLEEP_AFTER to a duration:
  *   npx wrangler secret put SANDBOX_SLEEP_AFTER
  *   # Enter: 10m (or 1h, 30m, etc.)
@@ -176,12 +181,15 @@ app.use('*', async (c, next) => {
     }
 
     // Return JSON error for API requests
-    return c.json({
-      error: 'Configuration error',
-      message: 'Required environment variables are not configured',
-      missing: missingVars,
-      hint: 'Set these using: wrangler secret put <VARIABLE_NAME>',
-    }, 503);
+    return c.json(
+      {
+        error: 'Configuration error',
+        message: 'Required environment variables are not configured',
+        missing: missingVars,
+        hint: 'Set these using: wrangler secret put <VARIABLE_NAME>',
+      },
+      503,
+    );
   }
 
   return next();
@@ -210,7 +218,7 @@ app.use('*', async (c, next) => {
   const acceptsHtml = c.req.header('Accept')?.includes('text/html');
   const middleware = createAccessMiddleware({
     type: acceptsHtml ? 'html' : 'json',
-    redirectOnMissing: acceptsHtml
+    redirectOnMissing: acceptsHtml,
   });
 
   return middleware(c, next);
@@ -257,7 +265,7 @@ app.all('*', async (c) => {
     c.executionCtx.waitUntil(
       ensureMoltbotGateway(sandbox, c.env).catch((err: Error) => {
         console.error('[PROXY] Background gateway start failed:', err);
-      })
+      }),
     );
 
     // Return the loading page immediately
@@ -278,11 +286,14 @@ app.all('*', async (c) => {
       hint = 'Gateway ran out of memory. Try again or check for memory leaks.';
     }
 
-    return c.json({
-      error: 'Moltbot gateway failed to start',
-      details: errorMessage,
-      hint,
-    }, 503);
+    return c.json(
+      {
+        error: 'Moltbot gateway failed to start',
+        details: errorMessage,
+        hint,
+      },
+      503,
+    );
   }
 
   // Proxy to Moltbot with WebSocket message interception
@@ -295,8 +306,18 @@ app.all('*', async (c) => {
       console.log('[WS] URL:', url.pathname + redactedSearch);
     }
 
+    // Inject gateway token into WebSocket request if not already present.
+    // CF Access redirects strip query params, so authenticated users lose ?token=.
+    // Since the user already passed CF Access auth, we inject the token server-side.
+    let wsRequest = request;
+    if (c.env.MOLTBOT_GATEWAY_TOKEN && !url.searchParams.has('token')) {
+      const tokenUrl = new URL(url.toString());
+      tokenUrl.searchParams.set('token', c.env.MOLTBOT_GATEWAY_TOKEN);
+      wsRequest = new Request(tokenUrl.toString(), request);
+    }
+
     // Get WebSocket connection to the container
-    const containerResponse = await sandbox.wsConnect(request, MOLTBOT_PORT);
+    const containerResponse = await sandbox.wsConnect(wsRequest, MOLTBOT_PORT);
     console.log('[WS] wsConnect response status:', containerResponse.status);
 
     // Get the container-side WebSocket
@@ -326,7 +347,11 @@ app.all('*', async (c) => {
     // Relay messages from client to container
     serverWs.addEventListener('message', (event) => {
       if (debugLogs) {
-        console.log('[WS] Client -> Container:', typeof event.data, typeof event.data === 'string' ? event.data.slice(0, 200) : '(binary)');
+        console.log(
+          '[WS] Client -> Container:',
+          typeof event.data,
+          typeof event.data === 'string' ? event.data.slice(0, 200) : '(binary)',
+        );
       }
       if (containerWs.readyState === WebSocket.OPEN) {
         containerWs.send(event.data);
@@ -338,7 +363,11 @@ app.all('*', async (c) => {
     // Relay messages from container to client, with error transformation
     containerWs.addEventListener('message', (event) => {
       if (debugLogs) {
-        console.log('[WS] Container -> Client (raw):', typeof event.data, typeof event.data === 'string' ? event.data.slice(0, 500) : '(binary)');
+        console.log(
+          '[WS] Container -> Client (raw):',
+          typeof event.data,
+          typeof event.data === 'string' ? event.data.slice(0, 500) : '(binary)',
+        );
       }
       let data = event.data;
 
@@ -442,34 +471,19 @@ app.all('*', async (c) => {
 async function scheduled(
   _event: ScheduledEvent,
   env: MoltbotEnv,
-  _ctx: ExecutionContext
+  _ctx: ExecutionContext,
 ): Promise<void> {
   const options = buildSandboxOptions(env);
   const sandbox = getSandbox(env.Sandbox, 'moltbot', options);
 
-  // Step 1: Health check - ensure gateway is running
-  // This is critical because Telegram uses long-polling, not webhooks.
-  // If the polling connection dies and no HTTP requests come in to trigger
-  // ensureMoltbotGateway(), the bot becomes unresponsive.
-  console.log('[cron] Running gateway health check...');
-  try {
-    await ensureMoltbotGateway(sandbox, env);
-    console.log('[cron] Gateway health check passed');
-  } catch (error) {
-    console.error('[cron] Gateway health check failed:', error);
-    // Continue to R2 sync even if health check fails
-    // The sync might still work if container is partially running
+  const gatewayProcess = await findExistingMoltbotProcess(sandbox);
+  if (!gatewayProcess) {
+    console.log('[cron] Gateway not running yet, skipping sync');
+    return;
   }
 
-  // Step 2: Backup - sync to R2
   console.log('[cron] Starting backup sync to R2...');
-  const result = await syncToR2(sandbox, env);
-
-  if (result.success) {
-    console.log('[cron] Backup sync completed successfully at', result.lastSync);
-  } else {
-    console.error('[cron] Backup sync failed:', result.error, result.details || '');
-  }
+  await fireAndForgetSync(sandbox, env);
 }
 
 export default {

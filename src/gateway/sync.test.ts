@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { syncToR2 } from './sync';
-import { 
-  createMockEnv, 
-  createMockEnvWithR2, 
-  createMockProcess, 
-  createMockSandbox, 
-  suppressConsole 
+import {
+  createMockEnv,
+  createMockEnvWithR2,
+  createMockProcess,
+  createMockSandbox,
+  suppressConsole,
 } from '../test-utils';
 
 describe('syncToR2', () => {
@@ -28,7 +28,7 @@ describe('syncToR2', () => {
       const { sandbox, startProcessMock, mountBucketMock } = createMockSandbox();
       startProcessMock.mockResolvedValue(createMockProcess(''));
       mountBucketMock.mockRejectedValue(new Error('Mount failed'));
-      
+
       const env = createMockEnvWithR2();
 
       const result = await syncToR2(sandbox, env);
@@ -39,82 +39,95 @@ describe('syncToR2', () => {
   });
 
   describe('sanity checks', () => {
-    it('returns error when source is missing clawdbot.json', async () => {
+    it('returns error when source has no config file', async () => {
       const { sandbox, startProcessMock } = createMockSandbox();
       startProcessMock
-        .mockResolvedValueOnce(createMockProcess('s3fs on /data/moltbot type fuse.s3fs\n'))
-        .mockResolvedValueOnce(createMockProcess('')); // No "ok" output
-      
+        .mockResolvedValueOnce(createMockProcess('mounted\n'))
+        .mockResolvedValueOnce(createMockProcess('')) // No openclaw.json
+        .mockResolvedValueOnce(createMockProcess('')); // No clawdbot.json either
+
       const env = createMockEnvWithR2();
 
       const result = await syncToR2(sandbox, env);
 
-      // Error message still references clawdbot.json since that's the actual file name
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Sync aborted: source missing clawdbot.json');
-      expect(result.details).toContain('missing critical files');
+      expect(result.error).toBe('Sync aborted: no config file found');
     });
   });
 
   describe('sync execution', () => {
-    it('returns success when sync completes', async () => {
+    it('returns success when timestamp file is written', async () => {
       const { sandbox, startProcessMock } = createMockSandbox();
       const timestamp = '2026-01-27T12:00:00+00:00';
-      
-      // Calls: mount check, sanity check, rsync, cat timestamp
-      startProcessMock
-        .mockResolvedValueOnce(createMockProcess('s3fs on /data/moltbot type fuse.s3fs\n'))
-        .mockResolvedValueOnce(createMockProcess('ok'))
-        .mockResolvedValueOnce(createMockProcess(''))
-        .mockResolvedValueOnce(createMockProcess(timestamp));
-      
-      const env = createMockEnvWithR2();
 
+      // Calls: mount check, config detect, rsync (all-in-one), cat timestamp
+      startProcessMock
+        .mockResolvedValueOnce(createMockProcess('mounted\n'))
+        .mockResolvedValueOnce(createMockProcess('exists'))
+        .mockResolvedValueOnce(createMockProcess('')) // rsync chain
+        .mockResolvedValueOnce(createMockProcess(timestamp)); // cat timestamp
+
+      const env = createMockEnvWithR2();
       const result = await syncToR2(sandbox, env);
 
       expect(result.success).toBe(true);
       expect(result.lastSync).toBe(timestamp);
     });
 
-    it('returns error when rsync fails (no timestamp created)', async () => {
-      const { sandbox, startProcessMock } = createMockSandbox();
-      
-      // Calls: mount check, sanity check, rsync (fails), cat timestamp (empty)
-      startProcessMock
-        .mockResolvedValueOnce(createMockProcess('s3fs on /data/moltbot type fuse.s3fs\n'))
-        .mockResolvedValueOnce(createMockProcess('ok'))
-        .mockResolvedValueOnce(createMockProcess('', { exitCode: 1 }))
-        .mockResolvedValueOnce(createMockProcess(''));
-      
-      const env = createMockEnvWithR2();
-
-      const result = await syncToR2(sandbox, env);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Sync failed');
-    });
-
-    it('verifies rsync command is called with correct flags', async () => {
+    it('falls back to legacy clawdbot config directory', async () => {
       const { sandbox, startProcessMock } = createMockSandbox();
       const timestamp = '2026-01-27T12:00:00+00:00';
-      
+
       startProcessMock
-        .mockResolvedValueOnce(createMockProcess('s3fs on /data/moltbot type fuse.s3fs\n'))
-        .mockResolvedValueOnce(createMockProcess('ok'))
+        .mockResolvedValueOnce(createMockProcess('mounted\n'))
+        .mockResolvedValueOnce(createMockProcess('')) // No openclaw.json
+        .mockResolvedValueOnce(createMockProcess('exists')) // clawdbot.json found
+        .mockResolvedValueOnce(createMockProcess('')) // rsync chain
+        .mockResolvedValueOnce(createMockProcess(timestamp));
+
+      const env = createMockEnvWithR2();
+      const result = await syncToR2(sandbox, env);
+
+      expect(result.success).toBe(true);
+
+      // rsync chain should reference .clawdbot
+      const rsyncCall = startProcessMock.mock.calls[3][0];
+      expect(rsyncCall).toContain('/root/.clawdbot/');
+    });
+
+    it('returns error when no timestamp after sync', async () => {
+      const { sandbox, startProcessMock } = createMockSandbox();
+
+      startProcessMock
+        .mockResolvedValueOnce(createMockProcess('mounted\n'))
+        .mockResolvedValueOnce(createMockProcess('exists'))
+        .mockResolvedValueOnce(createMockProcess('')) // rsync chain
+        .mockResolvedValue(createMockProcess('')); // all cat polls return empty
+
+      const env = createMockEnvWithR2();
+      const result = await syncToR2(sandbox, env, 10, 3); // fast: 10ms interval, 3 polls
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Sync timed out');
+    });
+
+    it('verifies rsync command excludes .git', async () => {
+      const { sandbox, startProcessMock } = createMockSandbox();
+      const timestamp = '2026-01-27T12:00:00+00:00';
+
+      startProcessMock
+        .mockResolvedValueOnce(createMockProcess('mounted\n'))
+        .mockResolvedValueOnce(createMockProcess('exists'))
         .mockResolvedValueOnce(createMockProcess(''))
         .mockResolvedValueOnce(createMockProcess(timestamp));
-      
-      const env = createMockEnvWithR2();
 
+      const env = createMockEnvWithR2();
       await syncToR2(sandbox, env);
 
-      // Third call should be rsync (paths still use clawdbot internally)
       const rsyncCall = startProcessMock.mock.calls[2][0];
-      expect(rsyncCall).toContain('rsync');
-      expect(rsyncCall).toContain('--no-times');
-      expect(rsyncCall).toContain('--delete');
-      expect(rsyncCall).toContain('/root/.clawdbot/');
-      expect(rsyncCall).toContain('/data/moltbot/');
+      expect(rsyncCall).toContain("--exclude='.git'");
+      expect(rsyncCall).toContain('/root/.openclaw/');
+      expect(rsyncCall).toContain('/data/moltbot/openclaw/');
     });
   });
 });
