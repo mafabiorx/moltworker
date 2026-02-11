@@ -282,6 +282,63 @@ console.log('Configuration patched successfully');
 EOFPATCH
 
 # ============================================================
+# P0 VERIFICATION (pre-gateway workspace integrity check)
+# ============================================================
+echo "Running P0 verification..."
+
+P0_ERRORS=0
+
+# Check workspace directory
+if [ ! -d "$WORKSPACE_DIR" ]; then
+    echo "WARNING: Workspace directory $WORKSPACE_DIR missing, creating..."
+    mkdir -p "$WORKSPACE_DIR"
+    P0_ERRORS=$((P0_ERRORS + 1))
+fi
+
+# Check critical workspace files
+for f in IDENTITY.md MEMORY.md USER.md; do
+    if [ ! -f "$WORKSPACE_DIR/$f" ]; then
+        echo "WARNING: $WORKSPACE_DIR/$f missing after restore"
+        P0_ERRORS=$((P0_ERRORS + 1))
+    fi
+done
+
+# Check skills directory has content
+if [ ! -d "$SKILLS_DIR" ]; then
+    echo "WARNING: Skills directory $SKILLS_DIR missing"
+    P0_ERRORS=$((P0_ERRORS + 1))
+else
+    SKILL_COUNT=$(find "$SKILLS_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)
+    if [ "$SKILL_COUNT" -eq 0 ]; then
+        echo "WARNING: No skills found in $SKILLS_DIR"
+        P0_ERRORS=$((P0_ERRORS + 1))
+    else
+        echo "Skills: $SKILL_COUNT found"
+    fi
+fi
+
+# Check config exists
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "WARNING: Config file $CONFIG_FILE missing after onboard/restore"
+    P0_ERRORS=$((P0_ERRORS + 1))
+fi
+
+# Check disk space
+DISK_FREE_MB=$(df -m / 2>/dev/null | awk 'NR==2 {print $4}')
+if [ -n "$DISK_FREE_MB" ] && [ "$DISK_FREE_MB" -eq "$DISK_FREE_MB" ] 2>/dev/null; then
+    echo "Disk free: ${DISK_FREE_MB}MB"
+    if [ "$DISK_FREE_MB" -lt 500 ]; then
+        echo "WARNING: Low disk space (${DISK_FREE_MB}MB free)"
+    fi
+fi
+
+if [ "$P0_ERRORS" -gt 0 ]; then
+    echo "P0 verification completed with $P0_ERRORS warning(s)"
+else
+    echo "P0 verification passed"
+fi
+
+# ============================================================
 # START GATEWAY
 # ============================================================
 echo "Starting OpenClaw Gateway..."
