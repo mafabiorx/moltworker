@@ -46,13 +46,17 @@ export async function writeHalStorageConfig(env: MoltbotEnv): Promise<void> {
   }
 
   try {
-    const config = [
-      '# HAL Storage R2 credentials (written by Worker, sourced by bootstrap)',
+    const lines = [
+      '# Bootstrap credentials (written by Worker, sourced by start-openclaw.sh)',
       `export HAL_STORAGE_ACCESS_KEY="${env.HAL_STORAGE_ACCESS_KEY}"`,
       `export HAL_STORAGE_SECRET_KEY="${env.HAL_STORAGE_SECRET_KEY || ''}"`,
       `export HAL_STORAGE_ENDPOINT="${env.HAL_STORAGE_ENDPOINT || ''}"`,
-      '',
-    ].join('\n');
+    ];
+    if (env.GH_PAT) {
+      lines.push(`export GH_PAT="${env.GH_PAT}"`);
+    }
+    lines.push('');
+    const config = lines.join('\n');
 
     await env.MOLTBOT_BUCKET.put('.hal_storage_env', config);
     console.log('[R2] Wrote HAL_STORAGE credentials to .hal_storage_env');

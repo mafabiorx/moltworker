@@ -1,5 +1,5 @@
 #!/bin/bash
-# Startup script for OpenClaw in Cloudflare Sandbox
+# Startup script for OpenClaw in Cloudflare Sandbox (bootstrap v4)
 # This script:
 # 1. Restores config from R2 backup if available
 # 2. Runs openclaw onboard --non-interactive to configure from env vars
@@ -336,6 +336,25 @@ if [ "$P0_ERRORS" -gt 0 ]; then
     echo "P0 verification completed with $P0_ERRORS warning(s)"
 else
     echo "P0 verification passed"
+fi
+
+# ============================================================
+# BOOTSTRAP (run in background on fresh rootfs)
+# ============================================================
+# The bootstrap installs tools (python3, rclone, uv, amp, etc.) that
+# survive only on rootfs. After a cold restart the rootfs is wiped but
+# the .bootstrap-complete marker may survive in the R2-backed workspace.
+# Use python3 absence as the definitive canary for fresh rootfs.
+if ! command -v python3 &>/dev/null && [ -f "$WORKSPACE_DIR/.bootstrap.sh" ]; then
+    echo "Fresh rootfs detected (python3 missing). Running bootstrap in background..."
+    # Source HAL storage credentials for rclone cache access
+    [ -f "$BACKUP_DIR/.hal_storage_env" ] && . "$BACKUP_DIR/.hal_storage_env"
+    bash "$WORKSPACE_DIR/.bootstrap.sh" > /tmp/bootstrap.log 2>&1 &
+    echo "Bootstrap started (PID: $!), log at /tmp/bootstrap.log"
+elif ! command -v python3 &>/dev/null; then
+    echo "WARNING: python3 missing but no .bootstrap.sh found — first boot?"
+else
+    echo "Rootfs tools present (python3 found), skipping bootstrap"
 fi
 
 # ============================================================

@@ -50,6 +50,9 @@ export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
   if (env.CDP_SECRET) envVars.CDP_SECRET = env.CDP_SECRET;
   if (env.WORKER_URL) envVars.WORKER_URL = env.WORKER_URL;
 
+  // GitHub PAT for workspace git sync (bootstrap needs it)
+  if (env.GH_PAT) envVars.GH_PAT = env.GH_PAT;
+
   // hal-storage R2 credentials: passed via R2 file (.hal_storage_env) instead of env vars.
   // Container-level env vars only update when container is recreated, so secrets added
   // after container creation won't be available. See writeHalStorageConfig() in r2.ts.

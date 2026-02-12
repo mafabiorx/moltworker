@@ -43,6 +43,8 @@ export interface MoltbotEnv {
   HAL_STORAGE_ACCESS_KEY?: string;
   HAL_STORAGE_SECRET_KEY?: string;
   HAL_STORAGE_ENDPOINT?: string; // https://<account_id>.r2.cloudflarestorage.com
+  // GitHub PAT for workspace git sync (used by bootstrap)
+  GH_PAT?: string;
   // Browser Rendering binding for CDP shim
   BROWSER?: Fetcher;
   CDP_SECRET?: string; // Shared secret for CDP endpoint authentication
