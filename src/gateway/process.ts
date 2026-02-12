@@ -2,7 +2,7 @@ import type { Sandbox, Process } from '@cloudflare/sandbox';
 import type { MoltbotEnv } from '../types';
 import { MOLTBOT_PORT, STARTUP_TIMEOUT_MS } from '../config';
 import { buildEnvVars } from './env';
-import { mountR2Storage } from './r2';
+import { mountR2Storage, writeHalStorageConfig } from './r2';
 
 /**
  * Clean up dead processes (completed/failed) to prevent accumulation
@@ -95,6 +95,10 @@ export async function ensureMoltbotGateway(sandbox: Sandbox, env: MoltbotEnv): P
   // Mount R2 storage for persistent data (non-blocking if not configured)
   // R2 is used as a backup - the startup script will restore from it on boot
   await mountR2Storage(sandbox, env);
+
+  // Write HAL_STORAGE credentials to R2 so the bootstrap can always find them
+  // (container-level env vars only update when container is recreated)
+  await writeHalStorageConfig(env);
 
   // Check if gateway is already running or starting
   const existingProcess = await findExistingMoltbotProcess(sandbox);

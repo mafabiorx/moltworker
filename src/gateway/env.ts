@@ -50,10 +50,9 @@ export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
   if (env.CDP_SECRET) envVars.CDP_SECRET = env.CDP_SECRET;
   if (env.WORKER_URL) envVars.WORKER_URL = env.WORKER_URL;
 
-  // hal-storage R2 credentials (for rclone binary cache in bootstrap)
-  if (env.HAL_STORAGE_ACCESS_KEY) envVars.HAL_STORAGE_ACCESS_KEY = env.HAL_STORAGE_ACCESS_KEY;
-  if (env.HAL_STORAGE_SECRET_KEY) envVars.HAL_STORAGE_SECRET_KEY = env.HAL_STORAGE_SECRET_KEY;
-  if (env.HAL_STORAGE_ENDPOINT) envVars.HAL_STORAGE_ENDPOINT = env.HAL_STORAGE_ENDPOINT;
+  // hal-storage R2 credentials: passed via R2 file (.hal_storage_env) instead of env vars.
+  // Container-level env vars only update when container is recreated, so secrets added
+  // after container creation won't be available. See writeHalStorageConfig() in r2.ts.
 
   return envVars;
 }

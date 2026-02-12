@@ -28,6 +28,40 @@ async function isR2Mounted(sandbox: Sandbox): Promise<boolean> {
 }
 
 /**
+ * Write HAL_STORAGE credentials to R2 persistent storage
+ *
+ * The container runtime bakes secrets into the container at creation time.
+ * Secrets added after container creation (like HAL_STORAGE_*) won't be in
+ * the container's env until the container is recreated. To work around this,
+ * we write the credentials to a file on R2 that the bootstrap can source.
+ *
+ * The file is written to .hal_storage_env in the R2 bucket, which the container
+ * sees at /data/moltbot/.hal_storage_env via s3fs mount.
+ *
+ * @param env - Worker environment bindings
+ */
+export async function writeHalStorageConfig(env: MoltbotEnv): Promise<void> {
+  if (!env.MOLTBOT_BUCKET || !env.HAL_STORAGE_ACCESS_KEY) {
+    return;
+  }
+
+  try {
+    const config = [
+      '# HAL Storage R2 credentials (written by Worker, sourced by bootstrap)',
+      `export HAL_STORAGE_ACCESS_KEY="${env.HAL_STORAGE_ACCESS_KEY}"`,
+      `export HAL_STORAGE_SECRET_KEY="${env.HAL_STORAGE_SECRET_KEY || ''}"`,
+      `export HAL_STORAGE_ENDPOINT="${env.HAL_STORAGE_ENDPOINT || ''}"`,
+      '',
+    ].join('\n');
+
+    await env.MOLTBOT_BUCKET.put('.hal_storage_env', config);
+    console.log('[R2] Wrote HAL_STORAGE credentials to .hal_storage_env');
+  } catch (err) {
+    console.log('[R2] Failed to write HAL_STORAGE config:', err);
+  }
+}
+
+/**
  * Mount R2 bucket for persistent storage
  *
  * @param sandbox - The sandbox instance
