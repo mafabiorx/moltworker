@@ -3,7 +3,7 @@ import { syncToR2 } from './sync';
 import {
   createMockEnv,
   createMockEnvWithR2,
-  createMockProcess,
+  createMockExecResult,
   createMockSandbox,
   suppressConsole,
 } from '../test-utils';
@@ -24,30 +24,36 @@ describe('syncToR2', () => {
       expect(result.error).toBe('R2 storage is not configured');
     });
 
-    it('returns error when mount fails', async () => {
-      const { sandbox, startProcessMock, mountBucketMock } = createMockSandbox();
-      startProcessMock.mockResolvedValue(createMockProcess(''));
-      mountBucketMock.mockRejectedValue(new Error('Mount failed'));
+    it('returns error when rclone config creation fails', async () => {
+      const { sandbox, execMock } = createMockSandbox();
+      execMock.mockImplementation(async (cmd: string) => {
+        if (String(cmd).includes('rclone.conf')) {
+          return createMockExecResult('', { success: false, stderr: 'permission denied' });
+        }
+        return createMockExecResult('');
+      });
 
       const env = createMockEnvWithR2();
-
       const result = await syncToR2(sandbox, env);
 
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Failed to mount R2 storage');
+      expect(result.error).toBe('Failed to create rclone config');
     });
   });
 
   describe('sanity checks', () => {
     it('returns error when source has no config file', async () => {
-      const { sandbox, startProcessMock } = createMockSandbox();
-      startProcessMock
-        .mockResolvedValueOnce(createMockProcess('mounted\n'))
-        .mockResolvedValueOnce(createMockProcess('')) // No openclaw.json
-        .mockResolvedValueOnce(createMockProcess('')); // No clawdbot.json either
+      const { sandbox, execMock } = createMockSandbox();
+      execMock.mockImplementation(async (cmd: string) => {
+        const s = String(cmd);
+        if (s.includes('rclone.conf')) return createMockExecResult('');
+        if (s.includes('test -f /root/.openclaw/openclaw.json')) {
+          return createMockExecResult('none');
+        }
+        return createMockExecResult('');
+      });
 
       const env = createMockEnvWithR2();
-
       const result = await syncToR2(sandbox, env);
 
       expect(result.success).toBe(false);
@@ -56,78 +62,117 @@ describe('syncToR2', () => {
   });
 
   describe('sync execution', () => {
-    it('returns success when timestamp file is written', async () => {
-      const { sandbox, startProcessMock } = createMockSandbox();
-      const timestamp = '2026-01-27T12:00:00+00:00';
-
-      // Calls: mount check, config detect, rsync (all-in-one), cat timestamp
-      startProcessMock
-        .mockResolvedValueOnce(createMockProcess('mounted\n'))
-        .mockResolvedValueOnce(createMockProcess('exists'))
-        .mockResolvedValueOnce(createMockProcess('')) // rsync chain
-        .mockResolvedValueOnce(createMockProcess(timestamp)); // cat timestamp
+    it('returns success when all rclone commands succeed', async () => {
+      const { sandbox, execMock } = createMockSandbox();
+      execMock.mockImplementation(async (cmd: string) => {
+        const s = String(cmd);
+        if (s.includes('rclone.conf')) return createMockExecResult('');
+        if (s.includes('test -f /root/.openclaw/openclaw.json')) {
+          return createMockExecResult('openclaw');
+        }
+        if (s.includes('rclone sync')) return createMockExecResult('');
+        if (s.includes('rclone rcat')) return createMockExecResult('');
+        return createMockExecResult('');
+      });
 
       const env = createMockEnvWithR2();
       const result = await syncToR2(sandbox, env);
 
       expect(result.success).toBe(true);
-      expect(result.lastSync).toBe(timestamp);
+      expect(result.lastSync).toBeTruthy();
     });
 
     it('falls back to legacy clawdbot config directory', async () => {
-      const { sandbox, startProcessMock } = createMockSandbox();
-      const timestamp = '2026-01-27T12:00:00+00:00';
-
-      startProcessMock
-        .mockResolvedValueOnce(createMockProcess('mounted\n'))
-        .mockResolvedValueOnce(createMockProcess('')) // No openclaw.json
-        .mockResolvedValueOnce(createMockProcess('exists')) // clawdbot.json found
-        .mockResolvedValueOnce(createMockProcess('')) // rsync chain
-        .mockResolvedValueOnce(createMockProcess(timestamp));
+      const { sandbox, execMock } = createMockSandbox();
+      execMock.mockImplementation(async (cmd: string) => {
+        const s = String(cmd);
+        if (s.includes('rclone.conf')) return createMockExecResult('');
+        if (s.includes('test -f /root/.openclaw/openclaw.json')) {
+          return createMockExecResult('clawdbot');
+        }
+        return createMockExecResult('');
+      });
 
       const env = createMockEnvWithR2();
       const result = await syncToR2(sandbox, env);
 
       expect(result.success).toBe(true);
 
-      // rsync chain should reference .clawdbot
-      const rsyncCall = startProcessMock.mock.calls[3][0];
-      expect(rsyncCall).toContain('/root/.clawdbot/');
+      // rclone sync should reference .clawdbot
+      const syncCall = execMock.mock.calls.find(
+        (c: unknown[]) => String(c[0]).includes('rclone sync') && String(c[0]).includes('.clawdbot'),
+      );
+      expect(syncCall).toBeTruthy();
     });
 
-    it('returns error when no timestamp after sync', async () => {
-      const { sandbox, startProcessMock } = createMockSandbox();
-
-      startProcessMock
-        .mockResolvedValueOnce(createMockProcess('mounted\n'))
-        .mockResolvedValueOnce(createMockProcess('exists'))
-        .mockResolvedValueOnce(createMockProcess('')) // rsync chain
-        .mockResolvedValue(createMockProcess('')); // all cat polls return empty
+    it('returns error when config sync fails', async () => {
+      const { sandbox, execMock } = createMockSandbox();
+      execMock.mockImplementation(async (cmd: string) => {
+        const s = String(cmd);
+        if (s.includes('rclone.conf')) return createMockExecResult('');
+        if (s.includes('test -f /root/.openclaw/openclaw.json')) {
+          return createMockExecResult('openclaw');
+        }
+        if (s.includes('rclone sync') && s.includes('openclaw/')) {
+          return createMockExecResult('', { success: false, stderr: 'sync error' });
+        }
+        return createMockExecResult('');
+      });
 
       const env = createMockEnvWithR2();
-      const result = await syncToR2(sandbox, env, 10, 3); // fast: 10ms interval, 3 polls
+      const result = await syncToR2(sandbox, env);
 
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Sync timed out');
+      expect(result.error).toBe('Config sync failed');
     });
 
-    it('verifies rsync command excludes .git', async () => {
-      const { sandbox, startProcessMock } = createMockSandbox();
-      const timestamp = '2026-01-27T12:00:00+00:00';
-
-      startProcessMock
-        .mockResolvedValueOnce(createMockProcess('mounted\n'))
-        .mockResolvedValueOnce(createMockProcess('exists'))
-        .mockResolvedValueOnce(createMockProcess(''))
-        .mockResolvedValueOnce(createMockProcess(timestamp));
+    it('passes R2 credentials via exec env for rclone config', async () => {
+      const { sandbox, execMock } = createMockSandbox();
 
       const env = createMockEnvWithR2();
       await syncToR2(sandbox, env);
 
-      const rsyncCall = startProcessMock.mock.calls[2][0];
-      expect(rsyncCall).toContain("--exclude='.git'");
-      expect(rsyncCall).toContain('/root/.openclaw/');
-      expect(rsyncCall).toContain('/data/moltbot/openclaw/');
+      // First call should be rclone config with env vars
+      const configCall = execMock.mock.calls.find(
+        (c: unknown[]) => String(c[0]).includes('rclone.conf'),
+      );
+      expect(configCall).toBeTruthy();
+      expect(configCall![1]).toEqual(
+        expect.objectContaining({
+          env: {
+            R2_ACCESS_KEY_ID: 'test-key-id',
+            R2_SECRET_ACCESS_KEY: 'test-secret-key',
+            CF_ACCOUNT_ID: 'test-account-id',
+          },
+        }),
+      );
+    });
+
+    it('uses custom bucket name from R2_BUCKET_NAME env var', async () => {
+      const { sandbox, execMock } = createMockSandbox();
+
+      const env = createMockEnvWithR2({ R2_BUCKET_NAME: 'custom-bucket' });
+      await syncToR2(sandbox, env);
+
+      // Sync calls should use custom bucket name
+      const syncCall = execMock.mock.calls.find(
+        (c: unknown[]) => String(c[0]).includes('r2:custom-bucket'),
+      );
+      expect(syncCall).toBeTruthy();
+    });
+
+    it('verifies rclone sync command excludes .git', async () => {
+      const { sandbox, execMock } = createMockSandbox();
+
+      const env = createMockEnvWithR2();
+      await syncToR2(sandbox, env);
+
+      const syncCall = execMock.mock.calls.find(
+        (c: unknown[]) => String(c[0]).includes('rclone sync') && String(c[0]).includes('openclaw/'),
+      );
+      expect(syncCall).toBeTruthy();
+      expect(String(syncCall![0])).toContain(".git/**");
+      expect(String(syncCall![0])).toContain('/root/.openclaw/');
     });
   });
 });

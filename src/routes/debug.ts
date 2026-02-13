@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { findExistingMoltbotProcess, waitForProcess } from '../gateway';
+import { summarizeAuthState } from '../gateway/auth-state';
 
 /**
  * Debug routes for inspecting container state
@@ -8,6 +9,29 @@ import { findExistingMoltbotProcess, waitForProcess } from '../gateway';
  * when mounted in the main app
  */
 const debug = new Hono<AppEnv>();
+
+async function readContainerFile(
+  sandbox: AppEnv['Variables']['sandbox'],
+  path: string,
+  timeoutMs: number = 5000,
+): Promise<string | null> {
+  const proc = await sandbox.startProcess(`test -f '${path}' && cat '${path}' || true`);
+  await waitForProcess(proc, timeoutMs);
+  const logs = await proc.getLogs();
+  const stdout = logs.stdout || '';
+  return stdout.trim() ? stdout : null;
+}
+
+async function containerFileExists(
+  sandbox: AppEnv['Variables']['sandbox'],
+  path: string,
+  timeoutMs: number = 5000,
+): Promise<boolean> {
+  const proc = await sandbox.startProcess(`test -f '${path}' && echo exists || echo missing`);
+  await waitForProcess(proc, timeoutMs);
+  const logs = await proc.getLogs();
+  return (logs.stdout || '').includes('exists');
+}
 
 // GET /debug/version - Returns version info from inside the container
 debug.get('/version', async (c) => {
@@ -380,6 +404,31 @@ debug.get('/container-config', async (c) => {
       raw: config ? undefined : stdout,
       stderr,
     });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({ error: errorMessage }, 500);
+  }
+});
+
+// GET /debug/auth-state - Show sanitized auth/provider state inside the container
+debug.get('/auth-state', async (c) => {
+  const sandbox = c.get('sandbox');
+
+  try {
+    const [configText, authProfilesText, oauthFilePresent] = await Promise.all([
+      readContainerFile(sandbox, '/root/.openclaw/openclaw.json'),
+      readContainerFile(sandbox, '/root/.openclaw/agents/main/agent/auth-profiles.json'),
+      containerFileExists(sandbox, '/root/.openclaw/credentials/oauth.json'),
+    ]);
+
+    const summary = summarizeAuthState({
+      configText,
+      authProfilesText,
+      oauthFilePresent,
+      agentId: 'main',
+    });
+
+    return c.json(summary);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return c.json({ error: errorMessage }, 500);

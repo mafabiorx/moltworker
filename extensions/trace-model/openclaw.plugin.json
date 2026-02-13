@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "id": "trace-model",
+  "name": "Trace Model",
+  "version": "0.1.0",
+  "description": "Toggle Telegram model trace prefix via /trace",
+  "entry": "index.ts",
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}
+

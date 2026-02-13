@@ -45,9 +45,20 @@ export function createMockProcess(
   };
 }
 
+/**
+ * Create a mock ExecResult for sandbox.exec() calls
+ */
+export function createMockExecResult(
+  stdout: string = '',
+  options: { success?: boolean; stderr?: string; exitCode?: number } = {},
+) {
+  const { success = true, stderr = '', exitCode = 0 } = options;
+  return { stdout, stderr, success, exitCode };
+}
+
 export interface MockSandbox {
   sandbox: Sandbox;
-  mountBucketMock: ReturnType<typeof vi.fn>;
+  execMock: ReturnType<typeof vi.fn>;
   startProcessMock: ReturnType<typeof vi.fn>;
   listProcessesMock: ReturnType<typeof vi.fn>;
   containerFetchMock: ReturnType<typeof vi.fn>;
@@ -58,30 +69,39 @@ export interface MockSandbox {
  */
 export function createMockSandbox(
   options: {
-    mounted?: boolean;
     processes?: Partial<Process>[];
   } = {},
 ): MockSandbox {
-  const mountBucketMock = vi.fn().mockResolvedValue(undefined);
   const listProcessesMock = vi.fn().mockResolvedValue(options.processes || []);
   const containerFetchMock = vi.fn();
 
-  // Default: 'not-mounted' (isR2Mounted returns false), unless mounted: true
-  const startProcessMock = vi
-    .fn()
-    .mockResolvedValue(
-      options.mounted ? createMockProcess('mounted\n') : createMockProcess('not-mounted\n'),
-    );
+  // Default exec mock returns success
+  const execMock = vi.fn().mockImplementation(async (cmd: string) => {
+    const s = String(cmd);
+
+    // Config detection for syncToR2
+    if (s.includes('test -f /root/.openclaw/openclaw.json')) {
+      return createMockExecResult('openclaw');
+    }
+
+    // Default success
+    return createMockExecResult('');
+  });
+
+  // Command-aware default for startProcess (still used by debug routes, api routes)
+  const startProcessMock = vi.fn().mockImplementation(async () => {
+    return createMockProcess('');
+  });
 
   const sandbox = {
-    mountBucket: mountBucketMock,
+    exec: execMock,
     listProcesses: listProcessesMock,
     startProcess: startProcessMock,
     containerFetch: containerFetchMock,
     wsConnect: vi.fn(),
   } as unknown as Sandbox;
 
-  return { sandbox, mountBucketMock, startProcessMock, listProcessesMock, containerFetchMock };
+  return { sandbox, execMock, startProcessMock, listProcessesMock, containerFetchMock };
 }
 
 /**

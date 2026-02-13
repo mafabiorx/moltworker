@@ -53,9 +53,16 @@ export function buildEnvVars(env: MoltbotEnv): Record<string, string> {
   // GitHub PAT for workspace git sync (bootstrap needs it)
   if (env.GH_PAT) envVars.GH_PAT = env.GH_PAT;
 
-  // hal-storage R2 credentials: passed via R2 file (.hal_storage_env) instead of env vars.
-  // Container-level env vars only update when container is recreated, so secrets added
-  // after container creation won't be available. See writeHalStorageConfig() in r2.ts.
+  // R2 credentials for rclone restore/sync (passed per-process, always fresh)
+  if (env.R2_ACCESS_KEY_ID) envVars.R2_ACCESS_KEY_ID = env.R2_ACCESS_KEY_ID;
+  if (env.R2_SECRET_ACCESS_KEY) envVars.R2_SECRET_ACCESS_KEY = env.R2_SECRET_ACCESS_KEY;
+  if (env.R2_BUCKET_NAME) envVars.R2_BUCKET_NAME = env.R2_BUCKET_NAME;
+  if (env.CF_ACCOUNT_ID) envVars.CF_ACCOUNT_ID = env.CF_ACCOUNT_ID;
+
+  // HAL_STORAGE credentials for bootstrap binary cache
+  if (env.HAL_STORAGE_ACCESS_KEY) envVars.HAL_STORAGE_ACCESS_KEY = env.HAL_STORAGE_ACCESS_KEY;
+  if (env.HAL_STORAGE_SECRET_KEY) envVars.HAL_STORAGE_SECRET_KEY = env.HAL_STORAGE_SECRET_KEY;
+  if (env.HAL_STORAGE_ENDPOINT) envVars.HAL_STORAGE_ENDPOINT = env.HAL_STORAGE_ENDPOINT;
 
   return envVars;
 }

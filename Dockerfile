@@ -1,6 +1,6 @@
 FROM docker.io/cloudflare/sandbox:0.7.1
 
-# Install Node.js 22 (required by OpenClaw) and rsync (for R2 backup sync)
+# Install Node.js 22 (required by OpenClaw) and system dependencies
 # The base image has Node 20, we need to replace it with Node 22
 # Using direct binary download for reliability
 ENV NODE_VERSION=22.13.1
@@ -10,7 +10,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
          arm64) NODE_ARCH="arm64" ;; \
          *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1 ;; \
        esac \
-    && apt-get update && apt-get install -y xz-utils ca-certificates rsync \
+    && apt-get update && apt-get install -y xz-utils ca-certificates \
     && curl -fsSLk https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz -o /tmp/node.tar.xz \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
     && rm /tmp/node.tar.xz \
@@ -19,6 +19,9 @@ RUN ARCH="$(dpkg --print-architecture)" \
 
 # Install pnpm globally
 RUN npm install -g pnpm
+
+# Install rclone for R2 sync (replaces s3fs/rsync)
+RUN curl -sSf https://rclone.org/install.sh | bash && rclone version
 
 # Install OpenClaw (formerly clawdbot/moltbot)
 # Pin to specific version for reproducible builds
@@ -32,12 +35,15 @@ RUN mkdir -p /root/.openclaw \
     && mkdir -p /root/clawd/skills
 
 # Copy startup script
-# Build cache bust: 2026-02-13-openclaw-2026.2.12
+# Build cache bust: 2026-02-13-trace-plugin-fix-v1
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 RUN chmod +x /usr/local/bin/start-openclaw.sh
 
 # Copy custom skills
 COPY skills/ /root/clawd/skills/
+
+# Copy local OpenClaw extensions (plugins)
+COPY extensions/ /opt/hal/extensions/
 
 # Set working directory
 WORKDIR /root/clawd

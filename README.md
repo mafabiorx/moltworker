@@ -457,6 +457,12 @@ OpenClaw in Cloudflare Sandbox uses multiple authentication layers:
 
 **Gateway fails to start:** Check `npx wrangler secret list` and `npx wrangler tail`
 
+**Telegram shows `No API key found for provider "openai-codex"`:** This means `agents.defaults.model.primary` points at `openai-codex/...` but the container is missing a matching auth profile in `/root/.openclaw/agents/main/agent/auth-profiles.json`.
+1. Enable debug routes (`DEBUG_ROUTES=true`) and check `/debug/auth-state`.
+2. Check `/debug/container-config` to confirm `agents.defaults.model.primary`.
+3. Check `/debug/logs` for `[AUTH-RECONCILE]` lines from startup.
+4. If still degraded, run `openclaw agents add main` inside the container (or restore `auth-profiles.json` from backup), then restart the gateway.
+
 **Config changes not working:** Edit the `# Build cache bust:` comment in `Dockerfile` and redeploy
 
 **Slow first request:** Cold starts take 1-2 minutes. Subsequent requests are faster.

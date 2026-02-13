@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types';
 import { MOLTBOT_PORT } from '../config';
-import { findExistingMoltbotProcess, ensureMoltbotGateway } from '../gateway';
+import { ensureMoltbotGateway, findExistingMoltbotProcess, probeGatewayHttp, waitForProcess } from '../gateway';
 
 /**
  * Public routes - NO Cloudflare Access authentication required
@@ -36,18 +36,14 @@ publicRoutes.get('/api/status', async (c) => {
 
   try {
     const process = await findExistingMoltbotProcess(sandbox);
-    if (!process) {
-      return c.json({ ok: false, status: 'not_running' });
+    const reachable = await probeGatewayHttp(sandbox, 1500);
+
+    if (reachable) {
+      return c.json({ ok: true, status: 'running', processId: process?.id || 'untracked' });
     }
 
-    // Process exists, check if it's actually responding
-    // Try to reach the gateway with a short timeout
-    try {
-      await process.waitForPort(18789, { mode: 'tcp', timeout: 5000 });
-      return c.json({ ok: true, status: 'running', processId: process.id });
-    } catch {
-      return c.json({ ok: false, status: 'not_responding', processId: process.id });
-    }
+    if (!process) return c.json({ ok: false, status: 'not_running' });
+    return c.json({ ok: false, status: 'not_responding', processId: process.id });
   } catch (err) {
     return c.json({
       ok: false,
@@ -80,7 +76,7 @@ publicRoutes.post('/api/start', async (c) => {
     return c.json({
       ok: true,
       status: 'running',
-      processId: process?.id || 'unknown'
+      processId: process?.id || 'untracked'
     });
   } catch (err) {
     console.error('[API/START] Failed to start gateway:', err);
@@ -105,6 +101,24 @@ publicRoutes.post('/api/force-restart', async (c) => {
       } catch {
         // Ignore kill errors
       }
+    }
+
+    // Sandbox kill() doesn't always reap spawned gateway children; best-effort cleanup.
+    // Use `timeout` so this never leaves behind a long-running "cleanup" process.
+    try {
+      const proc = await sandbox.startProcess(
+        "bash -lc 'if command -v pkill >/dev/null 2>&1; then timeout 2 pkill -f \"[o]penclaw-gateway\" || true; timeout 2 pkill -f \"[/]usr/local/bin/start-openclaw.sh\" || true; timeout 2 pkill -x openclaw || true; fi; true'",
+      );
+      await waitForProcess(proc, 5000);
+      if (proc.status === 'running' || proc.status === 'starting') {
+        try {
+          await proc.kill();
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
     }
 
     return c.json({

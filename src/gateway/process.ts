@@ -2,7 +2,34 @@ import type { Sandbox, Process } from '@cloudflare/sandbox';
 import type { MoltbotEnv } from '../types';
 import { MOLTBOT_PORT, STARTUP_TIMEOUT_MS } from '../config';
 import { buildEnvVars } from './env';
-import { mountR2Storage, writeHalStorageConfig } from './r2';
+
+async function probeGatewayHttpOnce(sandbox: Sandbox, timeoutMs: number = 1500): Promise<boolean> {
+  const url = `http://localhost:${MOLTBOT_PORT}/`;
+  const probe = (async () => {
+    const res = await sandbox.containerFetch(new Request(url), MOLTBOT_PORT);
+    // If we get any non-5xx response, the port is reachable. 5xx can happen when the
+    // container isn't actually listening (platform proxy error).
+    return res.status >= 200 && res.status < 500;
+  })();
+
+  const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs));
+  try {
+    return await Promise.race([probe, timeout]);
+  } catch {
+    return false;
+  }
+}
+
+async function waitForGatewayHttp(sandbox: Sandbox, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop -- intentional polling
+    if (await probeGatewayHttpOnce(sandbox, 1500)) return true;
+    // eslint-disable-next-line no-await-in-loop -- intentional polling
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}
 
 /**
  * Clean up dead processes (completed/failed) to prevent accumulation
@@ -86,19 +113,22 @@ export async function findExistingMoltbotProcess(sandbox: Sandbox): Promise<Proc
  *
  * @param sandbox - The sandbox instance
  * @param env - Worker environment bindings
- * @returns The running gateway process
+ * @returns void (the gateway is reachable)
  */
-export async function ensureMoltbotGateway(sandbox: Sandbox, env: MoltbotEnv): Promise<Process> {
+export async function ensureMoltbotGateway(sandbox: Sandbox, env: MoltbotEnv): Promise<void> {
   // Clean up dead processes first to prevent accumulation
   await cleanupDeadProcesses(sandbox);
 
-  // Mount R2 storage for persistent data (non-blocking if not configured)
-  // R2 is used as a backup - the startup script will restore from it on boot
-  await mountR2Storage(sandbox, env);
+  // R2 access is now handled by rclone in the container startup script.
+  // Credentials flow via buildEnvVars() → process env vars.
 
-  // Write HAL_STORAGE credentials to R2 so the bootstrap can always find them
-  // (container-level env vars only update when container is recreated)
-  await writeHalStorageConfig(env);
+  // Sometimes the gateway can be running but not tracked in listProcesses()
+  // (for example, when a kill doesn't reap a spawned gateway child). In that case,
+  // treat "port is reachable" as source of truth and avoid starting a duplicate.
+  if (await probeGatewayHttpOnce(sandbox, 1000)) {
+    console.log('Gateway already reachable on port', MOLTBOT_PORT);
+    return;
+  }
 
   // Check if gateway is already running or starting
   const existingProcess = await findExistingMoltbotProcess(sandbox);
@@ -117,7 +147,7 @@ export async function ensureMoltbotGateway(sandbox: Sandbox, env: MoltbotEnv): P
       console.log('Waiting for gateway on port', MOLTBOT_PORT, 'timeout:', STARTUP_TIMEOUT_MS);
       await existingProcess.waitForPort(MOLTBOT_PORT, { mode: 'tcp', timeout: STARTUP_TIMEOUT_MS });
       console.log('Gateway is reachable');
-      return existingProcess;
+      return;
       // eslint-disable-next-line no-unused-vars
     } catch (_e) {
       // Timeout waiting for port - process is likely dead or stuck, kill and restart
@@ -160,6 +190,12 @@ export async function ensureMoltbotGateway(sandbox: Sandbox, env: MoltbotEnv): P
     if (logs.stderr) console.log('[Gateway] stderr:', logs.stderr);
   } catch (e) {
     console.error('[Gateway] waitForPort failed:', e);
+    // If the process exited early (or wasn't tracked), the gateway may still be reachable.
+    // Prefer a live port probe over the process handle.
+    if (await waitForGatewayHttp(sandbox, 10_000)) {
+      console.log('[Gateway] Port probe succeeded after waitForPort failure; treating gateway as ready');
+      return;
+    }
     try {
       const logs = await process.getLogs();
       console.error('[Gateway] startup failed. Stderr:', logs.stderr);
@@ -176,5 +212,13 @@ export async function ensureMoltbotGateway(sandbox: Sandbox, env: MoltbotEnv): P
   // Verify gateway is actually responding
   console.log('[Gateway] Verifying gateway health...');
 
-  return process;
+  if (!(await waitForGatewayHttp(sandbox, 10_000))) {
+    throw new Error('Gateway did not respond to HTTP probe after startup');
+  }
 }
+
+async function probeGatewayHttp(sandbox: Sandbox, timeoutMs: number = 1500): Promise<boolean> {
+  return waitForGatewayHttp(sandbox, timeoutMs);
+}
+
+export { probeGatewayHttp };
