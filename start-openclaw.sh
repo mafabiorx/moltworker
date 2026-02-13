@@ -341,20 +341,21 @@ fi
 # ============================================================
 # BOOTSTRAP (run in background on fresh rootfs)
 # ============================================================
-# The bootstrap installs tools (python3, rclone, uv, amp, etc.) that
+# The bootstrap installs tools (pip3, rclone, uv, amp, etc.) that
 # survive only on rootfs. After a cold restart the rootfs is wiped but
 # the .bootstrap-complete marker may survive in the R2-backed workspace.
-# Use python3 absence as the definitive canary for fresh rootfs.
-if ! command -v python3 &>/dev/null && [ -f "$WORKSPACE_DIR/.bootstrap.sh" ]; then
-    echo "Fresh rootfs detected (python3 missing). Running bootstrap in background..."
+# Use pip3 absence as the definitive canary for fresh rootfs.
+# NOTE: python3 is pre-installed in the base image, so it can't be used as canary.
+if ! command -v pip3 &>/dev/null && [ -f "$WORKSPACE_DIR/.bootstrap.sh" ]; then
+    echo "Fresh rootfs detected (pip3 missing). Running bootstrap in background..."
     # Source HAL storage credentials for rclone cache access
     [ -f "$BACKUP_DIR/.hal_storage_env" ] && . "$BACKUP_DIR/.hal_storage_env"
     bash "$WORKSPACE_DIR/.bootstrap.sh" > /tmp/bootstrap.log 2>&1 &
     echo "Bootstrap started (PID: $!), log at /tmp/bootstrap.log"
-elif ! command -v python3 &>/dev/null; then
-    echo "WARNING: python3 missing but no .bootstrap.sh found — first boot?"
+elif ! command -v pip3 &>/dev/null; then
+    echo "WARNING: pip3 missing but no .bootstrap.sh found — first boot?"
 else
-    echo "Rootfs tools present (python3 found), skipping bootstrap"
+    echo "Rootfs tools present (pip3 found), skipping bootstrap"
 fi
 
 # ============================================================
